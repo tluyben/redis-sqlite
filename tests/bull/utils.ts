@@ -153,12 +153,23 @@ function simulateDisconnect(queue: Queue): void {
 }
 
 function buildQueue(name?: string, options?: any): Queue {
+  const createClient = (type: string) => {
+    switch (type) {
+      case "client":
+      case "subscriber":
+        return new Redis({ filename: ":memory:" });
+      default:
+        return new Redis({ filename: ":memory:" });
+    }
+  };
+
   options = _.extend(
     {
       redis: new Redis({ filename: ":memory:" }),
     },
     options
   );
+
   const queue = new Bull(name || STD_QUEUE_NAME, options);
   (queue as any).childPool = {
     retained: {},

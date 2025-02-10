@@ -68,6 +68,13 @@ export class Redis extends EventEmitter {
     }
   }
 
+  async info(): Promise<string> {
+    const kv = await this.client.info();
+    return Object.keys(kv)
+      .map((k: any) => `${k}:${kv[k]}`)
+      .join("\r\n");
+  }
+
   async auth(password: string): Promise<"OK"> {
     return this.client.auth(password);
   }
@@ -350,14 +357,15 @@ class Pipeline {
 
       // Execute transaction
       const results = await this.redis.executeTransaction();
-      
+
       // Process results and resolve/reject promises
       for (let i = 0; i < this.commands.length; i++) {
         const cmd = this.commands[i];
         const [error, result] = results[i];
-        
+
         if (error) {
-          const redisError = error instanceof Error ? error : new RedisError(String(error));
+          const redisError =
+            error instanceof Error ? error : new RedisError(String(error));
           cmd.reject(redisError);
           results[i] = [redisError, null];
         } else {
@@ -368,7 +376,8 @@ class Pipeline {
       this.commands = [];
       return results;
     } catch (error) {
-      const redisError = error instanceof Error ? error : new RedisError(String(error));
+      const redisError =
+        error instanceof Error ? error : new RedisError(String(error));
       this.commands = [];
       throw redisError;
     }

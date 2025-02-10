@@ -800,6 +800,13 @@ export class RedisSQLite extends EventEmitter {
     return this.flushdb();
   }
 
+  // Server info
+  async info(): Promise<{ [key: string]: string }> {
+    return {
+      redis_version: "6.0.0", // Hardcoded version for our SQLite-based Redis implementation
+    };
+  }
+
   // Cleanup
   async close(): Promise<void> {
     if (this.expiryCheckerId) {
