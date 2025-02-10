@@ -1,0 +1,52 @@
+{
+  "name": "redis-sqlite",
+  "version": "1.0.0",
+  "description": "Redis-compatible implementation backed by SQLite",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "redis",
+    "sqlite",
+    "bull",
+    "queue",
+    "ioredis",
+    "node-redis"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "sqlite3": "^5.1.7",
+    "sqlite": "^5.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/jest": "^29.5.11",
+    "typescript": "^5.3.3",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "@types/sqlite3": "^3.1.11"
+  },
+  "peerDependencies": {
+    "bull": "^4.12.0",
+    "ioredis": "^5.3.2"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./server": "./dist/redis-server.js",
+    "./ioredis": "./dist/ioredis-sqlite.js",
+    "./node-redis": "./dist/node-redis-sqlite.js"
+  },
+  "files": [
+    "dist",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
