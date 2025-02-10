@@ -139,6 +139,14 @@ export class Redis extends EventEmitter {
     return this.client.get(key);
   }
 
+  async mget(...keys: string[]): Promise<(string | null)[]> {
+    return this.client.mget(...keys);
+  }
+
+  async lrange(key: string, start: number, stop: number): Promise<string[]> {
+    return this.client.lrange(key, start, stop);
+  }
+
   // Hash commands
   async hset(
     key: string,
@@ -290,6 +298,16 @@ export class Redis extends EventEmitter {
     return pipeline;
   }
 
+  // Internal method for Pipeline to add commands to transaction
+  addTransactionCommand(command: string, args: any[]): void {
+    this.client.addCommand(command, args);
+  }
+
+  // Internal method for Pipeline to execute transaction
+  async executeTransaction(): Promise<Array<[Error | null, any]>> {
+    return this.client.exec();
+  }
+
   // Watch-related methods (needed for Bull)
   watch(...keys: string[]): Promise<"OK"> {
     // SQLite doesn't need watch as it has built-in transaction support
@@ -313,22 +331,36 @@ class Pipeline {
   constructor(private redis: Redis) {}
 
   async exec(): Promise<Array<[Error | null, any]>> {
-    const results: Array<[Error | null, any]> = [];
-
-    for (const cmd of this.commands) {
-      try {
-        // @ts-ignore - we know these methods exist on redis
-        const result = await this.redis[cmd.command](...cmd.args);
-        results.push([null, result]);
-        cmd.resolve(result);
-      } catch (error) {
-        results.push([error as Error, null]);
-        cmd.reject(error as Error);
+    try {
+      // Add commands to transaction
+      for (const cmd of this.commands) {
+        this.redis.addTransactionCommand(cmd.command, cmd.args);
       }
-    }
 
-    this.commands = [];
-    return results;
+      // Execute transaction
+      const results = await this.redis.executeTransaction();
+      
+      // Process results and resolve/reject promises
+      for (let i = 0; i < this.commands.length; i++) {
+        const cmd = this.commands[i];
+        const [error, result] = results[i];
+        
+        if (error) {
+          const redisError = error instanceof Error ? error : new RedisError(String(error));
+          cmd.reject(redisError);
+          results[i] = [redisError, null];
+        } else {
+          cmd.resolve(result);
+        }
+      }
+
+      this.commands = [];
+      return results;
+    } catch (error) {
+      const redisError = error instanceof Error ? error : new RedisError(String(error));
+      this.commands = [];
+      throw redisError;
+    }
   }
 
   // String operations
@@ -375,6 +407,15 @@ class Pipeline {
 
   rpush(key: string, ...values: (string | number | Buffer)[]): Pipeline {
     return this.addCommand("rpush", [key, ...values]);
+  }
+
+  lrange(key: string, start: number, stop: number): Pipeline {
+    return this.addCommand("lrange", [key, start, stop]);
+  }
+
+  // Multiple key operations
+  mget(...keys: string[]): Pipeline {
+    return this.addCommand("mget", keys);
   }
 
   lpop(key: string): Pipeline {

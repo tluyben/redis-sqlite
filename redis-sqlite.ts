@@ -9,14 +9,19 @@ interface RedisOptions {
 
 export class RedisSQLite extends EventEmitter {
   private db: Database | null = null;
+  private inTransaction: boolean = false;
   private transactionMode: boolean = false;
-  private transactionCommands: string[] = [];
+  private transactionCommands: Array<{
+    command: string;
+    args: any[];
+  }> = [];
   private password: string | null = null;
   private isAuthenticated: boolean = false;
   private blockingOperations: Map<
     string,
     Array<(value: string | null) => void>
   > = new Map();
+  private expiryCheckerId: NodeJS.Timeout | null = null;
 
   constructor(private options: RedisOptions = {}) {
     super();
@@ -79,10 +84,10 @@ export class RedisSQLite extends EventEmitter {
     await this.db.exec(`
       CREATE TABLE IF NOT EXISTS list_store (
         key TEXT,
-        index INTEGER,
+        "index" INTEGER,
         value TEXT,
         expiry INTEGER,
-        PRIMARY KEY (key, index)
+        PRIMARY KEY (key, "index")
       )`);
 
     // Set store (for unique job IDs and delayed jobs)
@@ -94,17 +99,23 @@ export class RedisSQLite extends EventEmitter {
         PRIMARY KEY (key, member)
       )`);
 
-    // Create indexes
-    await this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_string_store_expiry ON string_store(expiry);
-      CREATE INDEX IF NOT EXISTS idx_hash_store_expiry ON hash_store(expiry);
-      CREATE INDEX IF NOT EXISTS idx_list_store_expiry ON list_store(expiry);
-      CREATE INDEX IF NOT EXISTS idx_set_store_expiry ON set_store(expiry);
-    `);
+    // Create indexes - one statement at a time to avoid syntax errors
+    await this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_string_store_expiry ON string_store(expiry)"
+    );
+    await this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_hash_store_expiry ON hash_store(expiry)"
+    );
+    await this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_list_store_expiry ON list_store(expiry)"
+    );
+    await this.db.exec(
+      "CREATE INDEX IF NOT EXISTS idx_set_store_expiry ON set_store(expiry)"
+    );
   }
 
   private startExpiryChecker(): void {
-    setInterval(async () => {
+    this.expiryCheckerId = setInterval(async () => {
       if (!this.db) return;
       const now = Date.now();
 
@@ -138,27 +149,54 @@ export class RedisSQLite extends EventEmitter {
     return result ? result.value : null;
   }
 
+  async mget(...keys: string[]): Promise<(string | null)[]> {
+    if (!this.db) throw new Error("Database not initialized");
+
+    const results: (string | null)[] = [];
+    for (const key of keys) {
+      const result = await this.get(key);
+      results.push(result);
+    }
+    return results;
+  }
+
   // List operations (crucial for Bull)
   async lpush(key: string, ...values: string[]): Promise<number> {
     if (!this.db) throw new Error("Database not initialized");
 
-    await this.db.run("BEGIN TRANSACTION");
+    // Check if key exists in string_store
+    const stringResult = await this.db.get(
+      "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      [key, Date.now()]
+    );
+
+    if (stringResult) {
+      throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
+    if (!this.inTransaction && !this.transactionMode) {
+      await this.db.run("BEGIN TRANSACTION");
+      this.inTransaction = true;
+    }
     try {
       // Shift existing elements
       await this.db.run(
-        "UPDATE list_store SET index = index + ? WHERE key = ?",
+        'UPDATE list_store SET "index" = "index" + ? WHERE key = ?',
         [values.length, key]
       );
 
-      // Insert new elements
+      // Insert new elements in reverse order for LIFO behavior
       for (let i = 0; i < values.length; i++) {
         await this.db.run(
-          "INSERT INTO list_store (key, index, value) VALUES (?, ?, ?)",
-          [key, i, values[i]]
+          'INSERT INTO list_store (key, "index", value) VALUES (?, ?, ?)',
+          [key, i, values[values.length - 1 - i]]
         );
       }
 
-      await this.db.run("COMMIT");
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("COMMIT");
+        this.inTransaction = false;
+      }
 
       const result = await this.db.get<{ count: number }>(
         "SELECT COUNT(*) as count FROM list_store WHERE key = ?",
@@ -166,7 +204,10 @@ export class RedisSQLite extends EventEmitter {
       );
       return result?.count ?? 0;
     } catch (error) {
-      await this.db.run("ROLLBACK");
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("ROLLBACK");
+        this.inTransaction = false;
+      }
       throw error;
     }
   }
@@ -174,42 +215,112 @@ export class RedisSQLite extends EventEmitter {
   async rpush(key: string, ...values: string[]): Promise<number> {
     if (!this.db) throw new Error("Database not initialized");
 
+    // Check if key exists in string_store
+    const stringResult = await this.db.get(
+      "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      [key, Date.now()]
+    );
+
+    if (stringResult) {
+      throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
     const result = await this.db.get<{ count: number }>(
       "SELECT COUNT(*) as count FROM list_store WHERE key = ?",
       [key]
     );
     let currentLength = result?.count ?? 0;
 
-    await this.db.run("BEGIN TRANSACTION");
+    if (!this.inTransaction && !this.transactionMode) {
+      await this.db.run("BEGIN TRANSACTION");
+      this.inTransaction = true;
+    }
+
     try {
       for (const value of values) {
         await this.db.run(
-          "INSERT INTO list_store (key, index, value) VALUES (?, ?, ?)",
+          'INSERT INTO list_store (key, "index", value) VALUES (?, ?, ?)',
           [key, currentLength++, value]
         );
       }
-      await this.db.run("COMMIT");
+
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("COMMIT");
+        this.inTransaction = false;
+      }
+
       return currentLength;
     } catch (error) {
-      await this.db.run("ROLLBACK");
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("ROLLBACK");
+        this.inTransaction = false;
+      }
       throw error;
     }
   }
 
-  async rpop(key: string): Promise<string | null> {
+  async lrange(key: string, start: number, stop: number): Promise<string[]> {
     if (!this.db) throw new Error("Database not initialized");
 
-    const result = await this.db.get<{ value: string }>(
-      "SELECT value FROM list_store WHERE key = ? ORDER BY index DESC LIMIT 1",
+    // Convert negative indices to positive ones
+    const result = await this.db.get<{ count: number }>(
+      "SELECT COUNT(*) as count FROM list_store WHERE key = ?",
+      [key]
+    );
+    const length = result?.count ?? 0;
+
+    let realStart = start >= 0 ? start : length + start;
+    let realStop = stop >= 0 ? stop : length + stop;
+
+    // Ensure indices are within bounds
+    realStart = Math.max(0, realStart);
+    realStop = Math.min(length - 1, realStop);
+
+    if (realStart > realStop) {
+      return [];
+    }
+
+    const results = await this.db.all<{ value: string }[]>(
+      'SELECT value FROM list_store WHERE key = ? AND "index" BETWEEN ? AND ? ORDER BY "index" ASC',
+      [key, realStart, realStop]
+    );
+
+    return results.map((row) => row.value);
+  }
+
+  async rpop(
+    key: string,
+    inTransaction: boolean = false
+  ): Promise<string | null> {
+    if (!this.db) throw new Error("Database not initialized");
+
+    const result = await this.db.get<{ value: string; index: number }>(
+      'SELECT value, "index" FROM list_store WHERE key = ? ORDER BY "index" DESC LIMIT 1',
       [key]
     );
 
     if (result) {
-      await this.db.run(
-        "DELETE FROM list_store WHERE key = ? AND index = (SELECT MAX(index) FROM list_store WHERE key = ?)",
-        [key, key]
-      );
-      return result.value;
+      if (!inTransaction) {
+        await this.db.run("BEGIN TRANSACTION");
+        this.inTransaction = true;
+      }
+      try {
+        await this.db.run(
+          'DELETE FROM list_store WHERE key = ? AND "index" = ?',
+          [key, result.index]
+        );
+        if (!inTransaction) {
+          await this.db.run("COMMIT");
+          this.inTransaction = false;
+        }
+        return result.value;
+      } catch (error) {
+        if (!inTransaction) {
+          await this.db.run("ROLLBACK");
+          this.inTransaction = false;
+        }
+        throw error;
+      }
     }
 
     return null;
@@ -219,25 +330,36 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const result = await this.db.get<{ value: string }>(
-      "SELECT value FROM list_store WHERE key = ? ORDER BY index ASC LIMIT 1",
+      'SELECT value FROM list_store WHERE key = ? ORDER BY "index" ASC LIMIT 1',
       [key]
     );
 
     if (result) {
-      await this.db.run("BEGIN TRANSACTION");
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("BEGIN TRANSACTION");
+        this.inTransaction = true;
+      }
+
       try {
         await this.db.run(
-          "DELETE FROM list_store WHERE key = ? AND index = 0",
+          'DELETE FROM list_store WHERE key = ? AND "index" = 0',
           [key]
         );
         await this.db.run(
-          "UPDATE list_store SET index = index - 1 WHERE key = ?",
+          'UPDATE list_store SET "index" = "index" - 1 WHERE key = ?',
           [key]
         );
-        await this.db.run("COMMIT");
+
+        if (!this.inTransaction && !this.transactionMode) {
+          await this.db.run("COMMIT");
+          this.inTransaction = false;
+        }
         return result.value;
       } catch (error) {
-        await this.db.run("ROLLBACK");
+        if (!this.inTransaction && !this.transactionMode) {
+          await this.db.run("ROLLBACK");
+          this.inTransaction = false;
+        }
         throw error;
       }
     }
@@ -249,18 +371,31 @@ export class RedisSQLite extends EventEmitter {
   async rpoplpush(source: string, destination: string): Promise<string | null> {
     if (!this.db) throw new Error("Database not initialized");
 
-    await this.db.run("BEGIN TRANSACTION");
+    if (!this.inTransaction && !this.transactionMode) {
+      await this.db.run("BEGIN TRANSACTION");
+      this.inTransaction = true;
+    }
+
     try {
-      const value = await this.rpop(source);
+      const value = await this.rpop(source, true);
       if (value !== null) {
         await this.lpush(destination, value);
-        await this.db.run("COMMIT");
+        if (!this.inTransaction && !this.transactionMode) {
+          await this.db.run("COMMIT");
+          this.inTransaction = false;
+        }
         return value;
       }
-      await this.db.run("ROLLBACK");
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("ROLLBACK");
+        this.inTransaction = false;
+      }
       return null;
     } catch (error) {
-      await this.db.run("ROLLBACK");
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("ROLLBACK");
+        this.inTransaction = false;
+      }
       throw error;
     }
   }
@@ -344,6 +479,18 @@ export class RedisSQLite extends EventEmitter {
 
   async hget(key: string, field: string): Promise<string | null> {
     if (!this.db) throw new Error("Database not initialized");
+
+    // Check if key exists in string_store
+    const stringResult = await this.db.get(
+      "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      [key, Date.now()]
+    );
+
+    if (stringResult) {
+      throw new Error(
+        "WRONGTYPE Operation against a key holding the wrong kind of value"
+      );
+    }
 
     const result = await this.db.get<{ value: string }>(
       "SELECT value FROM hash_store WHERE key = ? AND field = ? AND (expiry IS NULL OR expiry > ?)",
@@ -458,8 +605,22 @@ export class RedisSQLite extends EventEmitter {
   async sadd(key: string, ...members: string[]): Promise<number> {
     if (!this.db) throw new Error("Database not initialized");
 
+    // Check if key exists in string_store
+    const stringResult = await this.db.get(
+      "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      [key, Date.now()]
+    );
+
+    if (stringResult) {
+      throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+    }
+
     let added = 0;
-    await this.db.run("BEGIN TRANSACTION");
+    if (!this.inTransaction && !this.transactionMode) {
+      await this.db.run("BEGIN TRANSACTION");
+      this.inTransaction = true;
+    }
+
     try {
       for (const member of members) {
         const result = await this.db.run(
@@ -468,10 +629,18 @@ export class RedisSQLite extends EventEmitter {
         );
         added += result.changes ?? 0;
       }
-      await this.db.run("COMMIT");
+
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("COMMIT");
+        this.inTransaction = false;
+      }
+
       return added;
     } catch (error) {
-      await this.db.run("ROLLBACK");
+      if (!this.inTransaction && !this.transactionMode) {
+        await this.db.run("ROLLBACK");
+        this.inTransaction = false;
+      }
       throw error;
     }
   }
@@ -495,29 +664,61 @@ export class RedisSQLite extends EventEmitter {
     this.transactionCommands = [];
   }
 
-  async exec(): Promise<any[]> {
+  addCommand(command: string, args: any[]): void {
+    if (!this.transactionMode) {
+      throw new Error("No transaction in progress");
+    }
+    this.transactionCommands.push({ command, args });
+  }
+
+  async exec(): Promise<[Error | null, any][]> {
     if (!this.db) throw new Error("Database not initialized");
 
     if (!this.transactionMode) {
       throw new Error("No transaction in progress");
     }
 
+    const results: [Error | null, any][] = [];
+
     try {
-      await this.db.run("BEGIN TRANSACTION");
-      const results = [];
+      if (!this.inTransaction) {
+        await this.db.run("BEGIN TRANSACTION");
+        this.inTransaction = true;
+      }
 
       for (const cmd of this.transactionCommands) {
-        // Execute each command and collect results
-        results.push(null);
+        try {
+          // Check for wrong type errors before executing command
+          if (cmd.command === 'hget' || cmd.command === 'hset' || cmd.command === 'hmset') {
+            const stringResult = await this.db.get(
+              "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+              [cmd.args[0], Date.now()]
+            );
+            if (stringResult) {
+              throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+            }
+          }
+
+          // Execute the command and collect result
+          const result = await (this as any)[cmd.command](...cmd.args);
+          results.push([null, result]);
+        } catch (error) {
+          const redisError = error instanceof Error ? error : new Error(String(error));
+          results.push([redisError, null]);
+        }
       }
 
       await this.db.run("COMMIT");
+      this.inTransaction = false;
       this.transactionMode = false;
       this.transactionCommands = [];
 
       return results;
     } catch (error) {
-      await this.db.run("ROLLBACK");
+      if (this.inTransaction) {
+        await this.db.run("ROLLBACK");
+        this.inTransaction = false;
+      }
       this.transactionMode = false;
       this.transactionCommands = [];
       throw error;
@@ -565,6 +766,10 @@ export class RedisSQLite extends EventEmitter {
 
   // Cleanup
   async close(): Promise<void> {
+    if (this.expiryCheckerId) {
+      clearInterval(this.expiryCheckerId);
+      this.expiryCheckerId = null;
+    }
     if (this.db) {
       await this.db.close();
       this.db = null;
