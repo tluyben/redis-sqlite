@@ -1,6 +1,6 @@
 # 🚀 SQLite-backed Redis Implementation
 
-A lightweight Redis-compatible implementation backed by SQLite, perfect for development, testing, and situations where you need Redis semantics without the Redis server. Especially to be compatible with Bull queues.
+A lightweight Redis-compatible implementation backed by SQLite, perfect for development, testing, and situations where you need Redis semantics without the Redis server.
 
 ## ✨ Features
 
@@ -86,21 +86,6 @@ await client.set("key", "value");
 const value = await client.get("key");
 ```
 
-#### 🎯 With Bull
-
-```typescript
-import Queue from "bull";
-import { Redis } from "redis-sqlite/ioredis";
-
-const redis = new Redis();
-
-const myQueue = new Queue("myQueue", {
-  redis: redis,
-});
-
-await myQueue.add({ data: "my job" });
-```
-
 ## ⚠️ Limitations
 
 ### 🚫 Not Implemented
@@ -136,4 +121,3 @@ MIT License - see LICENSE file for details.
 
 - SQLite team for the amazing database
 - Redis team for the protocol specification
-- Bull team for the queue implementation
