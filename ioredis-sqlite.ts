@@ -283,6 +283,17 @@ export class Redis extends EventEmitter {
     return this.client.ttl(key);
   }
 
+  // Database operations
+  async flushdb(): Promise<"OK"> {
+    await this.client.flushdb();
+    return "OK";
+  }
+
+  async flushall(): Promise<"OK"> {
+    await this.client.flushall();
+    return "OK";
+  }
+
   // Transaction support
   multi(commands?: Array<[string, ...any[]]>): Pipeline {
     const pipeline = new Pipeline(this);

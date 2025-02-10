@@ -20,16 +20,26 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "sqlite3": "^5.1.7",
-    "sqlite": "^5.1.1"
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7"
   },
   "devDependencies": {
-    "@types/node": "^20.11.0",
+    "@types/bull": "^4.10.4",
     "@types/jest": "^29.5.11",
-    "typescript": "^5.3.3",
+    "@types/lodash": "^4.17.15",
+    "@types/moment": "^2.13.0",
+    "@types/node": "^20.11.0",
+    "@types/sinon": "^17.0.3",
+    "@types/sqlite3": "^3.1.11",
+    "bull": "^4.16.5",
+    "bullmq": "^5.40.2",
+    "delay": "^6.0.0",
     "jest": "^29.7.0",
+    "lodash": "^4.17.21",
+    "p-reflect": "^3.1.0",
+    "sinon": "^19.0.2",
     "ts-jest": "^29.1.1",
-    "@types/sqlite3": "^3.1.11"
+    "typescript": "^5.3.3"
   },
   "peerDependencies": {
     "bull": "^4.12.0",

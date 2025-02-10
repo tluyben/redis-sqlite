@@ -171,7 +171,9 @@ export class RedisSQLite extends EventEmitter {
     );
 
     if (stringResult) {
-      throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+      throw new Error(
+        "WRONGTYPE Operation against a key holding the wrong kind of value"
+      );
     }
 
     if (!this.inTransaction && !this.transactionMode) {
@@ -222,7 +224,9 @@ export class RedisSQLite extends EventEmitter {
     );
 
     if (stringResult) {
-      throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+      throw new Error(
+        "WRONGTYPE Operation against a key holding the wrong kind of value"
+      );
     }
 
     const result = await this.db.get<{ count: number }>(
@@ -612,7 +616,9 @@ export class RedisSQLite extends EventEmitter {
     );
 
     if (stringResult) {
-      throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+      throw new Error(
+        "WRONGTYPE Operation against a key holding the wrong kind of value"
+      );
     }
 
     let added = 0;
@@ -689,13 +695,19 @@ export class RedisSQLite extends EventEmitter {
       for (const cmd of this.transactionCommands) {
         try {
           // Check for wrong type errors before executing command
-          if (cmd.command === 'hget' || cmd.command === 'hset' || cmd.command === 'hmset') {
+          if (
+            cmd.command === "hget" ||
+            cmd.command === "hset" ||
+            cmd.command === "hmset"
+          ) {
             const stringResult = await this.db.get(
               "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
               [cmd.args[0], Date.now()]
             );
             if (stringResult) {
-              throw new Error("WRONGTYPE Operation against a key holding the wrong kind of value");
+              throw new Error(
+                "WRONGTYPE Operation against a key holding the wrong kind of value"
+              );
             }
           }
 
@@ -703,7 +715,8 @@ export class RedisSQLite extends EventEmitter {
           const result = await (this as any)[cmd.command](...cmd.args);
           results.push([null, result]);
         } catch (error) {
-          const redisError = error instanceof Error ? error : new Error(String(error));
+          const redisError =
+            error instanceof Error ? error : new Error(String(error));
           results.push([redisError, null]);
         }
       }
@@ -762,6 +775,29 @@ export class RedisSQLite extends EventEmitter {
     }
 
     return -2; // Key does not exist
+  }
+
+  // Database operations
+  async flushdb(): Promise<void> {
+    if (!this.db) throw new Error("Database not initialized");
+
+    const tables = ["string_store", "hash_store", "list_store", "set_store"];
+    await this.db.run("BEGIN TRANSACTION");
+    try {
+      for (const table of tables) {
+        await this.db.run(`DELETE FROM ${table}`);
+      }
+      await this.db.run("COMMIT");
+    } catch (error) {
+      await this.db.run("ROLLBACK");
+      throw error;
+    }
+  }
+
+  async flushall(): Promise<void> {
+    // In our implementation, flushdb and flushall do the same thing
+    // since we don't support multiple databases
+    return this.flushdb();
   }
 
   // Cleanup
