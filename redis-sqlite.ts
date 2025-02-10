@@ -2,6 +2,8 @@ import sqlite3 from "sqlite3";
 import { Database, open } from "sqlite";
 import { EventEmitter } from "events";
 
+const TABLE_PREFIX = process.env.REDIS_SQLITE_PREFIX || "redis_";
+
 interface RedisOptions {
   filename?: string; // :memory: or file path
   password?: string; // Redis auth password
@@ -64,7 +66,7 @@ export class RedisSQLite extends EventEmitter {
 
     // Main key-value store for strings
     await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS string_store (
+      CREATE TABLE IF NOT EXISTS ${TABLE_PREFIX}string_store (
         key TEXT PRIMARY KEY,
         value TEXT,
         expiry INTEGER
@@ -72,7 +74,7 @@ export class RedisSQLite extends EventEmitter {
 
     // Hash store (crucial for Bull job data)
     await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS hash_store (
+      CREATE TABLE IF NOT EXISTS ${TABLE_PREFIX}hash_store (
         key TEXT,
         field TEXT,
         value TEXT,
@@ -82,7 +84,7 @@ export class RedisSQLite extends EventEmitter {
 
     // List store (for job queues)
     await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS list_store (
+      CREATE TABLE IF NOT EXISTS ${TABLE_PREFIX}list_store (
         key TEXT,
         "index" INTEGER,
         value TEXT,
@@ -92,7 +94,7 @@ export class RedisSQLite extends EventEmitter {
 
     // Set store (for unique job IDs and delayed jobs)
     await this.db.exec(`
-      CREATE TABLE IF NOT EXISTS set_store (
+      CREATE TABLE IF NOT EXISTS ${TABLE_PREFIX}set_store (
         key TEXT,
         member TEXT,
         expiry INTEGER,
@@ -101,16 +103,16 @@ export class RedisSQLite extends EventEmitter {
 
     // Create indexes - one statement at a time to avoid syntax errors
     await this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_string_store_expiry ON string_store(expiry)"
+      `CREATE INDEX IF NOT EXISTS idx_${TABLE_PREFIX}string_store_expiry ON ${TABLE_PREFIX}string_store(expiry)`
     );
     await this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_hash_store_expiry ON hash_store(expiry)"
+      `CREATE INDEX IF NOT EXISTS idx_${TABLE_PREFIX}hash_store_expiry ON ${TABLE_PREFIX}hash_store(expiry)`
     );
     await this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_list_store_expiry ON list_store(expiry)"
+      `CREATE INDEX IF NOT EXISTS idx_${TABLE_PREFIX}list_store_expiry ON ${TABLE_PREFIX}list_store(expiry)`
     );
     await this.db.exec(
-      "CREATE INDEX IF NOT EXISTS idx_set_store_expiry ON set_store(expiry)"
+      `CREATE INDEX IF NOT EXISTS idx_${TABLE_PREFIX}set_store_expiry ON ${TABLE_PREFIX}set_store(expiry)`
     );
   }
 
@@ -119,7 +121,12 @@ export class RedisSQLite extends EventEmitter {
       if (!this.db) return;
       const now = Date.now();
 
-      const tables = ["string_store", "hash_store", "list_store", "set_store"];
+      const tables = [
+        `${TABLE_PREFIX}string_store`,
+        `${TABLE_PREFIX}hash_store`,
+        `${TABLE_PREFIX}list_store`,
+        `${TABLE_PREFIX}set_store`,
+      ];
       for (const table of tables) {
         await this.db.run(`DELETE FROM ${table} WHERE expiry < ?`, now);
       }
@@ -131,7 +138,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     await this.db.run(
-      "INSERT OR REPLACE INTO string_store (key, value) VALUES (?, ?)",
+      `INSERT OR REPLACE INTO ${TABLE_PREFIX}string_store (key, value) VALUES (?, ?)`,
       [key, value]
     );
 
@@ -142,7 +149,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const result = await this.db.get<{ value: string }>(
-      "SELECT value FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      `SELECT value FROM ${TABLE_PREFIX}string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)`,
       [key, Date.now()]
     );
 
@@ -166,7 +173,7 @@ export class RedisSQLite extends EventEmitter {
 
     // Check if key exists in string_store
     const stringResult = await this.db.get(
-      "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      `SELECT 1 FROM ${TABLE_PREFIX}string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)`,
       [key, Date.now()]
     );
 
@@ -183,14 +190,14 @@ export class RedisSQLite extends EventEmitter {
     try {
       // Shift existing elements
       await this.db.run(
-        'UPDATE list_store SET "index" = "index" + ? WHERE key = ?',
+        `UPDATE ${TABLE_PREFIX}list_store SET "index" = "index" + ? WHERE key = ?`,
         [values.length, key]
       );
 
       // Insert new elements in reverse order for LIFO behavior
       for (let i = 0; i < values.length; i++) {
         await this.db.run(
-          'INSERT INTO list_store (key, "index", value) VALUES (?, ?, ?)',
+          `INSERT INTO ${TABLE_PREFIX}list_store (key, "index", value) VALUES (?, ?, ?)`,
           [key, i, values[values.length - 1 - i]]
         );
       }
@@ -201,7 +208,7 @@ export class RedisSQLite extends EventEmitter {
       }
 
       const result = await this.db.get<{ count: number }>(
-        "SELECT COUNT(*) as count FROM list_store WHERE key = ?",
+        `SELECT COUNT(*) as count FROM ${TABLE_PREFIX}list_store WHERE key = ?`,
         [key]
       );
       return result?.count ?? 0;
@@ -219,7 +226,7 @@ export class RedisSQLite extends EventEmitter {
 
     // Check if key exists in string_store
     const stringResult = await this.db.get(
-      "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      `SELECT 1 FROM ${TABLE_PREFIX}string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)`,
       [key, Date.now()]
     );
 
@@ -230,7 +237,7 @@ export class RedisSQLite extends EventEmitter {
     }
 
     const result = await this.db.get<{ count: number }>(
-      "SELECT COUNT(*) as count FROM list_store WHERE key = ?",
+      `SELECT COUNT(*) as count FROM ${TABLE_PREFIX}list_store WHERE key = ?`,
       [key]
     );
     let currentLength = result?.count ?? 0;
@@ -243,7 +250,7 @@ export class RedisSQLite extends EventEmitter {
     try {
       for (const value of values) {
         await this.db.run(
-          'INSERT INTO list_store (key, "index", value) VALUES (?, ?, ?)',
+          `INSERT INTO ${TABLE_PREFIX}list_store (key, "index", value) VALUES (?, ?, ?)`,
           [key, currentLength++, value]
         );
       }
@@ -268,7 +275,7 @@ export class RedisSQLite extends EventEmitter {
 
     // Convert negative indices to positive ones
     const result = await this.db.get<{ count: number }>(
-      "SELECT COUNT(*) as count FROM list_store WHERE key = ?",
+      `SELECT COUNT(*) as count FROM ${TABLE_PREFIX}list_store WHERE key = ?`,
       [key]
     );
     const length = result?.count ?? 0;
@@ -285,7 +292,7 @@ export class RedisSQLite extends EventEmitter {
     }
 
     const results = await this.db.all<{ value: string }[]>(
-      'SELECT value FROM list_store WHERE key = ? AND "index" BETWEEN ? AND ? ORDER BY "index" ASC',
+      `SELECT value FROM ${TABLE_PREFIX}list_store WHERE key = ? AND "index" BETWEEN ? AND ? ORDER BY "index" ASC`,
       [key, realStart, realStop]
     );
 
@@ -299,7 +306,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const result = await this.db.get<{ value: string; index: number }>(
-      'SELECT value, "index" FROM list_store WHERE key = ? ORDER BY "index" DESC LIMIT 1',
+      `SELECT value, "index" FROM ${TABLE_PREFIX}list_store WHERE key = ? ORDER BY "index" DESC LIMIT 1`,
       [key]
     );
 
@@ -310,7 +317,7 @@ export class RedisSQLite extends EventEmitter {
       }
       try {
         await this.db.run(
-          'DELETE FROM list_store WHERE key = ? AND "index" = ?',
+          `DELETE FROM ${TABLE_PREFIX}list_store WHERE key = ? AND "index" = ?`,
           [key, result.index]
         );
         if (!inTransaction) {
@@ -334,7 +341,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const result = await this.db.get<{ value: string }>(
-      'SELECT value FROM list_store WHERE key = ? ORDER BY "index" ASC LIMIT 1',
+      `SELECT value FROM ${TABLE_PREFIX}list_store WHERE key = ? ORDER BY "index" ASC LIMIT 1`,
       [key]
     );
 
@@ -346,11 +353,11 @@ export class RedisSQLite extends EventEmitter {
 
       try {
         await this.db.run(
-          'DELETE FROM list_store WHERE key = ? AND "index" = 0',
+          `DELETE FROM ${TABLE_PREFIX}list_store WHERE key = ? AND "index" = 0`,
           [key]
         );
         await this.db.run(
-          'UPDATE list_store SET "index" = "index" - 1 WHERE key = ?',
+          `UPDATE ${TABLE_PREFIX}list_store SET "index" = "index" - 1 WHERE key = ?`,
           [key]
         );
 
@@ -456,7 +463,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const result = await this.db.run(
-      "INSERT OR REPLACE INTO hash_store (key, field, value) VALUES (?, ?, ?)",
+      `INSERT OR REPLACE INTO ${TABLE_PREFIX}hash_store (key, field, value) VALUES (?, ?, ?)`,
       [key, field, value]
     );
 
@@ -486,7 +493,7 @@ export class RedisSQLite extends EventEmitter {
 
     // Check if key exists in string_store
     const stringResult = await this.db.get(
-      "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      `SELECT 1 FROM ${TABLE_PREFIX}string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)`,
       [key, Date.now()]
     );
 
@@ -497,7 +504,7 @@ export class RedisSQLite extends EventEmitter {
     }
 
     const result = await this.db.get<{ value: string }>(
-      "SELECT value FROM hash_store WHERE key = ? AND field = ? AND (expiry IS NULL OR expiry > ?)",
+      `SELECT value FROM ${TABLE_PREFIX}hash_store WHERE key = ? AND field = ? AND (expiry IS NULL OR expiry > ?)`,
       [key, field, Date.now()]
     );
 
@@ -508,7 +515,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const result = await this.db.run(
-      "DELETE FROM hash_store WHERE key = ? AND field IN (" +
+      `DELETE FROM ${TABLE_PREFIX}hash_store WHERE key = ? AND field IN (` +
         fields.map(() => "?").join(",") +
         ")",
       [key, ...fields]
@@ -528,7 +535,7 @@ export class RedisSQLite extends EventEmitter {
       for (const table of tables) {
         for (const key of keys) {
           const result = await this.db.run(
-            `DELETE FROM ${table} WHERE key = ?`,
+            `DELETE FROM ${TABLE_PREFIX}${table} WHERE key = ?`,
             [key]
           );
           deleted += (result.changes ?? 0) > 0 ? 1 : 0;
@@ -552,7 +559,7 @@ export class RedisSQLite extends EventEmitter {
       let exists = false;
       for (const table of tables) {
         const result = await this.db.get(
-          `SELECT 1 FROM ${table} WHERE key = ? LIMIT 1`,
+          `SELECT 1 FROM ${TABLE_PREFIX}${table} WHERE key = ? LIMIT 1`,
           [key]
         );
         if (result) {
@@ -573,7 +580,7 @@ export class RedisSQLite extends EventEmitter {
     const results: (string | null)[] = [];
     for (const field of fields) {
       const result = await this.db.get<{ value: string }>(
-        "SELECT value FROM hash_store WHERE key = ? AND field = ? AND (expiry IS NULL OR expiry > ?)",
+        `SELECT value FROM ${TABLE_PREFIX}hash_store WHERE key = ? AND field = ? AND (expiry IS NULL OR expiry > ?)`,
         [key, field, Date.now()]
       );
       results.push(result ? result.value : null);
@@ -587,7 +594,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const result = await this.db.get(
-      "SELECT 1 FROM set_store WHERE key = ? AND member = ? AND (expiry IS NULL OR expiry > ?)",
+      `SELECT 1 FROM ${TABLE_PREFIX}set_store WHERE key = ? AND member = ? AND (expiry IS NULL OR expiry > ?)`,
       [key, member, Date.now()]
     );
 
@@ -598,7 +605,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const results = await this.db.all<{ member: string }[]>(
-      "SELECT member FROM set_store WHERE key = ? AND (expiry IS NULL OR expiry > ?) ORDER BY member",
+      `SELECT member FROM ${TABLE_PREFIX}set_store WHERE key = ? AND (expiry IS NULL OR expiry > ?) ORDER BY member`,
       [key, Date.now()]
     );
 
@@ -611,7 +618,7 @@ export class RedisSQLite extends EventEmitter {
 
     // Check if key exists in string_store
     const stringResult = await this.db.get(
-      "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+      `SELECT 1 FROM ${TABLE_PREFIX}string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)`,
       [key, Date.now()]
     );
 
@@ -630,7 +637,7 @@ export class RedisSQLite extends EventEmitter {
     try {
       for (const member of members) {
         const result = await this.db.run(
-          "INSERT OR IGNORE INTO set_store (key, member) VALUES (?, ?)",
+          `INSERT OR IGNORE INTO ${TABLE_PREFIX}set_store (key, member) VALUES (?, ?)`,
           [key, member]
         );
         added += result.changes ?? 0;
@@ -655,7 +662,7 @@ export class RedisSQLite extends EventEmitter {
     if (!this.db) throw new Error("Database not initialized");
 
     const result = await this.db.run(
-      "DELETE FROM set_store WHERE key = ? AND member IN (" +
+      `DELETE FROM ${TABLE_PREFIX}set_store WHERE key = ? AND member IN (` +
         members.map(() => "?").join(",") +
         ")",
       [key, ...members]
@@ -701,7 +708,7 @@ export class RedisSQLite extends EventEmitter {
             cmd.command === "hmset"
           ) {
             const stringResult = await this.db.get(
-              "SELECT 1 FROM string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)",
+              `SELECT 1 FROM ${TABLE_PREFIX}string_store WHERE key = ? AND (expiry IS NULL OR expiry > ?)`,
               [cmd.args[0], Date.now()]
             );
             if (stringResult) {
@@ -748,7 +755,7 @@ export class RedisSQLite extends EventEmitter {
 
     for (const table of tables) {
       const result = await this.db.run(
-        `UPDATE ${table} SET expiry = ? WHERE key = ?`,
+        `UPDATE ${TABLE_PREFIX}${table} SET expiry = ? WHERE key = ?`,
         [expiry, key]
       );
       updated += result.changes ?? 0;
@@ -765,7 +772,7 @@ export class RedisSQLite extends EventEmitter {
 
     for (const table of tables) {
       const result = await this.db.get<{ expiry: number }>(
-        `SELECT expiry FROM ${table} WHERE key = ? AND expiry IS NOT NULL LIMIT 1`,
+        `SELECT expiry FROM ${TABLE_PREFIX}${table} WHERE key = ? AND expiry IS NOT NULL LIMIT 1`,
         [key]
       );
       if (result) {
@@ -785,7 +792,7 @@ export class RedisSQLite extends EventEmitter {
     await this.db.run("BEGIN TRANSACTION");
     try {
       for (const table of tables) {
-        await this.db.run(`DELETE FROM ${table}`);
+        await this.db.run(`DELETE FROM ${TABLE_PREFIX}${table}`);
       }
       await this.db.run("COMMIT");
     } catch (error) {
