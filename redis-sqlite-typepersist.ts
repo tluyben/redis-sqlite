@@ -47,85 +47,81 @@ export class RedisSQLite extends EventEmitter {
 
   private async initializeTables(): Promise<void> {
     // String store
-    await this.db.createTable(
-      this.db
-        .schema(`${TABLE_PREFIX}string_store`)
-        .field("key")
-        .type("Text")
-        .required()
-        .primaryKey()
-        .done()
-        .field("value")
-        .type("Text")
-        .done()
-        .field("expiry")
-        .type("Integer")
-        .index()
-        .done()
-    );
+    this.db
+      .schema(`${TABLE_PREFIX}string_store`)
+      .field("key")
+      .type("Text")
+      .required()
+      .primaryKey()
+      .done()
+      .field("value")
+      .type("Text")
+      .done()
+      .field("expiry")
+      .type("Integer")
+      .index()
+      .done()
+      .execute();
 
     // Hash store
-    await this.db.createTable(
-      this.db
-        .schema(`${TABLE_PREFIX}hash_store`)
-        .field("key")
-        .type("Text")
-        .required()
-        .done()
-        .field("field")
-        .type("Text")
-        .required()
-        .done()
-        .field("value")
-        .type("Text")
-        .done()
-        .field("expiry")
-        .type("Integer")
-        .index()
-        .done()
-        .primaryKey(["key", "field"])
-    );
+    this.db
+      .schema(`${TABLE_PREFIX}hash_store`)
+      .field("key")
+      .type("Text")
+      .required()
+      .done()
+      .field("field")
+      .type("Text")
+      .required()
+      .done()
+      .field("value")
+      .type("Text")
+      .done()
+      .field("expiry")
+      .type("Integer")
+      .index()
+      .done()
+      .primaryKey(["key", "field"])
+      .execute();
 
     // List store
-    await this.db.createTable(
-      this.db
-        .schema(`${TABLE_PREFIX}list_store`)
-        .field("key")
-        .type("Text")
-        .required()
-        .done()
-        .field("index")
-        .type("Integer")
-        .required()
-        .done()
-        .field("value")
-        .type("Text")
-        .done()
-        .field("expiry")
-        .type("Integer")
-        .index()
-        .done()
-        .primaryKey(["key", "index"])
-    );
+    this.db
+      .schema(`${TABLE_PREFIX}list_store`)
+      .field("key")
+      .type("Text")
+      .required()
+      .done()
+      .field("index")
+      .type("Integer")
+      .required()
+      .done()
+      .field("value")
+      .type("Text")
+      .done()
+      .field("expiry")
+      .type("Integer")
+      .index()
+      .done()
+      .primaryKey(["key", "index"])
+      .execute();
 
     // Set store
-    await this.db.createTable(
-      this.db
-        .schema(`${TABLE_PREFIX}set_store`)
-        .field("key")
-        .type("Text")
-        .required()
-        .done()
-        .field("member")
-        .type("Text")
-        .required()
-        .done()
-        .field("expiry")
-        .type("Integer")
-        .index()
-        .done()
-        .primaryKey(["key", "member"])
-    );
+    this.db
+      .schema(`${TABLE_PREFIX}set_store`)
+      .field("key")
+      .type("Text")
+      .required()
+      .done()
+      .field("member")
+      .type("Text")
+      .required()
+      .done()
+      .field("expiry")
+      .type("Integer")
+      .index()
+      .done()
+      .primaryKey(["key", "member"])
+      .execute();
   }
 
   private startExpiryChecker(): void {
